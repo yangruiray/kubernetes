@@ -29,8 +29,8 @@ import (
 	pvutil "k8s.io/kubernetes/pkg/controller/volume/persistentvolume/util"
 	"k8s.io/kubernetes/pkg/controller/volume/scheduling"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
-	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 	"k8s.io/utils/pointer"
 )
 
@@ -209,7 +209,7 @@ func TestVolumeBinding(t *testing.T) {
 			name:                "pvc not found",
 			pod:                 makePod("pod-a", []string{"pvc-a"}),
 			node:                &v1.Node{},
-			wantPreFilterStatus: framework.NewStatus(framework.Error, `error getting PVC "default/pvc-a": could not find v1.PersistentVolumeClaim "default/pvc-a"`),
+			wantPreFilterStatus: framework.NewStatus(framework.UnschedulableAndUnresolvable, `persistentvolumeclaim "pvc-a" not found`),
 			wantFilterStatus:    nil,
 		},
 		{
