@@ -7,7 +7,6 @@ pkg/apis/abac/v1beta1
 pkg/apis/admission
 pkg/apis/admissionregistration/v1
 pkg/apis/admissionregistration/v1beta1
-pkg/apis/apiserverinternal
 pkg/apis/apps/v1
 pkg/apis/apps/v1beta1
 pkg/apis/apps/v1beta2
@@ -78,7 +77,6 @@ pkg/controller/resourcequota/config/v1alpha1
 pkg/controller/serviceaccount/config/v1alpha1
 pkg/controller/statefulset
 pkg/controller/statefulset/config/v1alpha1
-pkg/controller/ttl
 pkg/controller/ttlafterfinished/config/v1alpha1
 pkg/controller/volume/attachdetach
 pkg/controller/volume/attachdetach/config/v1alpha1
