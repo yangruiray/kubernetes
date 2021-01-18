@@ -150,7 +150,7 @@ func makeMounts(pod *v1.Pod, podDir string, container *v1.Container, hostName, h
 		mountEtcHostsFile = mountEtcHostsFile && (mount.MountPath != etcHostsPath)
 		vol, ok := podVolumes[mount.Name]
 		if !ok || vol.Mounter == nil {
-			klog.Errorf("Mount cannot be satisfied for container %q, because the volume is missing or the volume mounter is nil: %+v", container.Name, mount)
+			klog.Errorf("Mount cannot be satisfied for container %q, because the volume is missing (ok=%v) or the volume mounter (vol.Mounter) is nil (vol=%+v): %+v", container.Name, ok, vol, mount)
 			return nil, cleanupAction, fmt.Errorf("cannot find volume %q to mount into container %q", mount.Name, container.Name)
 		}
 
@@ -834,7 +834,6 @@ func containerResourceRuntimeValue(fs *v1.ResourceFieldSelector, pod *v1.Pod, co
 }
 
 // One of the following arguments must be non-nil: runningPod, status.
-// TODO: Modify containerRuntime.KillPod() to accept the right arguments.
 func (kl *Kubelet) killPod(pod *v1.Pod, runningPod *kubecontainer.Pod, status *kubecontainer.PodStatus, gracePeriodOverride *int64) error {
 	var p kubecontainer.Pod
 	if runningPod != nil {
@@ -967,16 +966,6 @@ func (kl *Kubelet) PodResourcesAreReclaimed(pod *v1.Pod, status v1.PodStatus) bo
 		klog.V(3).Infof("Pod %q is terminated, but some containers have not been cleaned up: %s", format.Pod(pod), statusStr)
 		return false
 	}
-	// pod's sandboxes should be deleted
-	if len(runtimeStatus.SandboxStatuses) > 0 {
-		var sandboxStr string
-		for _, sandbox := range runtimeStatus.SandboxStatuses {
-			sandboxStr += fmt.Sprintf("%+v ", *sandbox)
-		}
-		klog.V(3).Infof("Pod %q is terminated, but some pod sandboxes have not been cleaned up: %s", format.Pod(pod), sandboxStr)
-		return false
-	}
-
 	if kl.podVolumesExist(pod.UID) && !kl.keepTerminatedPodVolumes {
 		// We shouldn't delete pods whose volumes have not been cleaned up if we are not keeping terminated pod volumes
 		klog.V(3).Infof("Pod %q is terminated, but some volumes have not been cleaned up", format.Pod(pod))
@@ -1095,7 +1084,6 @@ func (kl *Kubelet) HandlePodCleanups() error {
 		desiredPods[pod.UID] = sets.Empty{}
 	}
 	// Stop the workers for no-longer existing pods.
-	// TODO: is here the best place to forget pod workers?
 	kl.podWorkers.ForgetNonExistingPodWorkers(desiredPods)
 	kl.probeManager.CleanupPods(desiredPods)
 

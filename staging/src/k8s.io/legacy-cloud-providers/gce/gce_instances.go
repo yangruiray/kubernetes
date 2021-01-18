@@ -64,7 +64,7 @@ func splitNodesByZone(nodes []*v1.Node) map[string][]*v1.Node {
 }
 
 func getZone(n *v1.Node) string {
-	zone, ok := n.Labels[v1.LabelZoneFailureDomain]
+	zone, ok := n.Labels[v1.LabelFailureDomainBetaZone]
 	if !ok {
 		return defaultZone
 	}
@@ -407,7 +407,7 @@ func (g *Cloud) AddSSHKeyToAllInstances(ctx context.Context, user string, keyDat
 // GetAllCurrentZones returns all the zones in which k8s nodes are currently running
 func (g *Cloud) GetAllCurrentZones() (sets.String, error) {
 	if g.nodeInformerSynced == nil {
-		klog.Warningf("Cloud object does not have informers set, should only happen in E2E binary.")
+		klog.Warning("Cloud object does not have informers set, should only happen in E2E binary.")
 		return g.GetAllZonesFromCloudProvider()
 	}
 	g.nodeZonesLock.Lock()
