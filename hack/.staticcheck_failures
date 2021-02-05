@@ -1,10 +1,7 @@
 cluster/images/etcd/migrate
 pkg/controller/replicaset
 pkg/kubelet/dockershim
-pkg/volume/testing
 test/e2e/autoscaling
-test/integration/examples
-test/integration/framework
 test/integration/garbagecollector
 test/integration/scheduler_perf
 vendor/k8s.io/apimachinery/pkg/api/apitesting/roundtrip
@@ -15,8 +12,6 @@ vendor/k8s.io/apimachinery/pkg/util/net
 vendor/k8s.io/apimachinery/pkg/util/sets/types
 vendor/k8s.io/apimachinery/pkg/util/strategicpatch
 vendor/k8s.io/apimachinery/pkg/util/wait
-vendor/k8s.io/apiserver/pkg/authentication/request/x509
-vendor/k8s.io/apiserver/pkg/endpoints
 vendor/k8s.io/apiserver/pkg/endpoints/filters
 vendor/k8s.io/apiserver/pkg/endpoints/handlers
 vendor/k8s.io/apiserver/pkg/endpoints/handlers/fieldmanager
@@ -35,7 +30,6 @@ vendor/k8s.io/apiserver/pkg/storage/tests
 vendor/k8s.io/apiserver/pkg/storage/value/encrypt/envelope
 vendor/k8s.io/apiserver/pkg/util/webhook
 vendor/k8s.io/apiserver/pkg/util/wsstream
-vendor/k8s.io/cli-runtime/pkg/printers
 vendor/k8s.io/client-go/discovery
 vendor/k8s.io/client-go/rest
 vendor/k8s.io/client-go/rest/watch

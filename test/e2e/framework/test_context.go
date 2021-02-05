@@ -229,7 +229,8 @@ type NodeTestContextType struct {
 type CloudConfig struct {
 	APIEndpoint       string
 	ProjectID         string
-	Zone              string // for multizone tests, arbitrarily chosen zone
+	Zone              string   // for multizone tests, arbitrarily chosen zone
+	Zones             []string // for multizone tests, use this set of zones instead of querying the cloud provider. Must include Zone.
 	Region            string
 	MultiZone         bool
 	MultiMaster       bool
@@ -339,6 +340,7 @@ func RegisterClusterFlags(flags *flag.FlagSet) {
 	flags.StringVar(&cloudConfig.APIEndpoint, "gce-api-endpoint", "", "The GCE APIEndpoint being used, if applicable")
 	flags.StringVar(&cloudConfig.ProjectID, "gce-project", "", "The GCE project being used, if applicable")
 	flags.StringVar(&cloudConfig.Zone, "gce-zone", "", "GCE zone being used, if applicable")
+	flags.Var(cliflag.NewStringSlice(&cloudConfig.Zones), "gce-zones", "The set of zones to use in a multi-zone test instead of querying the cloud provider.")
 	flags.StringVar(&cloudConfig.Region, "gce-region", "", "GCE region being used, if applicable")
 	flags.BoolVar(&cloudConfig.MultiZone, "gce-multizone", false, "If true, start GCE cloud provider with multizone support.")
 	flags.BoolVar(&cloudConfig.MultiMaster, "gce-multimaster", false, "If true, the underlying GCE/GKE cluster is assumed to be multi-master.")
@@ -433,7 +435,7 @@ func AfterReadingAllFlags(t *TestContextType) {
 				kubeConfig := createKubeConfig(clusterConfig)
 				clientcmd.WriteToFile(*kubeConfig, tempFile.Name())
 				t.KubeConfig = tempFile.Name()
-				klog.Infof("Using a temporary kubeconfig file from in-cluster config : %s", tempFile.Name())
+				klog.V(4).Infof("Using a temporary kubeconfig file from in-cluster config : %s", tempFile.Name())
 			}
 		}
 		if len(t.KubeConfig) == 0 {
@@ -454,7 +456,7 @@ func AfterReadingAllFlags(t *TestContextType) {
 		t.AllowedNotReadyNodes = t.CloudConfig.NumNodes / 100
 	}
 
-	klog.Infof("Tolerating taints %q when considering if nodes are ready", TestContext.NonblockingTaints)
+	klog.V(4).Infof("Tolerating taints %q when considering if nodes are ready", TestContext.NonblockingTaints)
 
 	// Make sure that all test runs have a valid TestContext.CloudConfig.Provider.
 	// TODO: whether and how long this code is needed is getting discussed

@@ -423,6 +423,8 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 
 	var serviceLister corelisters.ServiceLister
 	var serviceHasSynced cache.InformerSynced
+	// If kubeClient == nil, we are running in standalone mode (i.e. no API servers)
+	// If not nil, we are running as part of a cluster and should sync w/API
 	if kubeDeps.KubeClient != nil {
 		kubeInformers := informers.NewSharedInformerFactory(kubeDeps.KubeClient, 0)
 		serviceLister = kubeInformers.Core().V1().Services().Lister()
@@ -444,7 +446,6 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 		nodeLister = kubeInformers.Core().V1().Nodes().Lister()
 		nodeHasSynced = func() bool {
 			if kubeInformers.Core().V1().Nodes().Informer().HasSynced() {
-				klog.Infof("kubelet nodes sync")
 				return true
 			}
 			klog.Infof("kubelet nodes not sync")
@@ -821,7 +822,11 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 		v1.NamespaceNodeLease,
 		util.SetNodeOwnerFunc(klet.heartbeatClient, string(klet.nodeName)))
 
-	klet.shutdownManager = nodeshutdown.NewManager(klet.GetActivePods, killPodNow(klet.podWorkers, kubeDeps.Recorder), kubeCfg.ShutdownGracePeriod.Duration, kubeCfg.ShutdownGracePeriodCriticalPods.Duration)
+	// setup node shutdown manager
+	shutdownManager, shutdownAdmitHandler := nodeshutdown.NewManager(klet.GetActivePods, killPodNow(klet.podWorkers, kubeDeps.Recorder), klet.syncNodeStatus, kubeCfg.ShutdownGracePeriod.Duration, kubeCfg.ShutdownGracePeriodCriticalPods.Duration)
+
+	klet.shutdownManager = shutdownManager
+	klet.admitHandlers.AddPodAdmitHandler(shutdownAdmitHandler)
 
 	// Finally, put the most recent version of the config on the Kubelet, so
 	// people can see how it was configured.
@@ -1499,6 +1504,15 @@ func (kl *Kubelet) syncPod(o syncPodOptions) error {
 		return nil
 	}
 
+	// If a pod is still gracefully terminating, then we do not want to
+	// take further action. This mitigates static pods and deleted pods
+	// from getting rerun prematurely or their cgroups being deleted before
+	// the runtime cleans up.
+	podFullName := kubecontainer.GetPodFullName(pod)
+	if kl.podKiller.IsPodPendingTerminationByPodName(podFullName) {
+		return fmt.Errorf("pod %q is pending termination", podFullName)
+	}
+
 	// Latency measurements for the main workflow are relative to the
 	// first time the pod was seen by the API server.
 	var firstSeenTime time.Time
@@ -1634,7 +1648,6 @@ func (kl *Kubelet) syncPod(o syncPodOptions) error {
 
 	// Create Mirror Pod for Static Pod if it doesn't already exist
 	if kubetypes.IsStaticPod(pod) {
-		podFullName := kubecontainer.GetPodFullName(pod)
 		deleted := false
 		if mirrorPod != nil {
 			if mirrorPod.DeletionTimestamp != nil || !kl.podManager.IsMirrorPodOf(mirrorPod, pod) {
@@ -1764,7 +1777,6 @@ func (kl *Kubelet) deletePod(pod *v1.Pod) error {
 		return fmt.Errorf("pod not found")
 	}
 	podPair := kubecontainer.PodPair{APIPod: pod, RunningPod: &runningPod}
-
 	kl.podKiller.KillPod(&podPair)
 
 	// We leave the volume/directory cleanup to the periodic cleanup routine.
@@ -2102,9 +2114,6 @@ func (kl *Kubelet) HandlePodRemoves(pods []*v1.Pod) {
 		if kubetypes.IsMirrorPod(pod) {
 			kl.handleMirrorPod(pod, start)
 			continue
-		}
-		if _, ok := kl.podManager.GetMirrorPodByPod(pod); ok {
-			kl.podKiller.MarkMirrorPodPendingTermination(pod)
 		}
 		// Deletion is allowed to fail because the periodic cleanup routine
 		// will trigger deletion again.

@@ -212,8 +212,10 @@ func WithCaptureProfile(c CaptureProfile) Option {
 	}
 }
 
-var defaultFrameworkOptions = frameworkOptions{
-	metricsRecorder: newMetricsRecorder(1000, time.Second),
+func defaultFrameworkOptions() frameworkOptions {
+	return frameworkOptions{
+		metricsRecorder: newMetricsRecorder(1000, time.Second),
+	}
 }
 
 // TODO(#91029): move this to frameworkImpl runtime package.
@@ -234,7 +236,7 @@ var _ framework.Framework = &frameworkImpl{}
 
 // NewFramework initializes plugins given the configuration and the registry.
 func NewFramework(r Registry, plugins *config.Plugins, args []config.PluginConfig, opts ...Option) (framework.Framework, error) {
-	options := defaultFrameworkOptions
+	options := defaultFrameworkOptions()
 	for _, opt := range opts {
 		opt(&options)
 	}
@@ -429,12 +431,11 @@ func (f *frameworkImpl) RunPreFilterPlugins(ctx context.Context, state *framewor
 	for _, pl := range f.preFilterPlugins {
 		status = f.runPreFilterPlugin(ctx, pl, state, pod)
 		if !status.IsSuccess() {
+			status.SetFailedPlugin(pl.Name())
 			if status.IsUnschedulable() {
 				return status
 			}
-			err := status.AsError()
-			klog.ErrorS(err, "Failed running PreFilter plugin", "plugin", pl.Name(), "pod", klog.KObj(pod))
-			return framework.AsStatus(fmt.Errorf("running PreFilter plugin %q: %w", pl.Name(), err))
+			return framework.AsStatus(fmt.Errorf("running PreFilter plugin %q: %w", pl.Name(), status.AsError())).WithFailedPlugin(pl.Name())
 		}
 	}
 
@@ -458,14 +459,14 @@ func (f *frameworkImpl) RunPreFilterExtensionAddPod(
 	ctx context.Context,
 	state *framework.CycleState,
 	podToSchedule *v1.Pod,
-	podToAdd *v1.Pod,
+	podInfoToAdd *framework.PodInfo,
 	nodeInfo *framework.NodeInfo,
 ) (status *framework.Status) {
 	for _, pl := range f.preFilterPlugins {
 		if pl.PreFilterExtensions() == nil {
 			continue
 		}
-		status = f.runPreFilterExtensionAddPod(ctx, pl, state, podToSchedule, podToAdd, nodeInfo)
+		status = f.runPreFilterExtensionAddPod(ctx, pl, state, podToSchedule, podInfoToAdd, nodeInfo)
 		if !status.IsSuccess() {
 			err := status.AsError()
 			klog.ErrorS(err, "Failed running AddPod on PreFilter plugin", "plugin", pl.Name(), "pod", klog.KObj(podToSchedule))
@@ -476,12 +477,12 @@ func (f *frameworkImpl) RunPreFilterExtensionAddPod(
 	return nil
 }
 
-func (f *frameworkImpl) runPreFilterExtensionAddPod(ctx context.Context, pl framework.PreFilterPlugin, state *framework.CycleState, podToSchedule *v1.Pod, podToAdd *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+func (f *frameworkImpl) runPreFilterExtensionAddPod(ctx context.Context, pl framework.PreFilterPlugin, state *framework.CycleState, podToSchedule *v1.Pod, podInfoToAdd *framework.PodInfo, nodeInfo *framework.NodeInfo) *framework.Status {
 	if !state.ShouldRecordPluginMetrics() {
-		return pl.PreFilterExtensions().AddPod(ctx, state, podToSchedule, podToAdd, nodeInfo)
+		return pl.PreFilterExtensions().AddPod(ctx, state, podToSchedule, podInfoToAdd, nodeInfo)
 	}
 	startTime := time.Now()
-	status := pl.PreFilterExtensions().AddPod(ctx, state, podToSchedule, podToAdd, nodeInfo)
+	status := pl.PreFilterExtensions().AddPod(ctx, state, podToSchedule, podInfoToAdd, nodeInfo)
 	f.metricsRecorder.observePluginDurationAsync(preFilterExtensionAddPod, pl.Name(), status, metrics.SinceInSeconds(startTime))
 	return status
 }
@@ -493,14 +494,14 @@ func (f *frameworkImpl) RunPreFilterExtensionRemovePod(
 	ctx context.Context,
 	state *framework.CycleState,
 	podToSchedule *v1.Pod,
-	podToRemove *v1.Pod,
+	podInfoToRemove *framework.PodInfo,
 	nodeInfo *framework.NodeInfo,
 ) (status *framework.Status) {
 	for _, pl := range f.preFilterPlugins {
 		if pl.PreFilterExtensions() == nil {
 			continue
 		}
-		status = f.runPreFilterExtensionRemovePod(ctx, pl, state, podToSchedule, podToRemove, nodeInfo)
+		status = f.runPreFilterExtensionRemovePod(ctx, pl, state, podToSchedule, podInfoToRemove, nodeInfo)
 		if !status.IsSuccess() {
 			err := status.AsError()
 			klog.ErrorS(err, "Failed running RemovePod on PreFilter plugin", "plugin", pl.Name(), "pod", klog.KObj(podToSchedule))
@@ -511,12 +512,12 @@ func (f *frameworkImpl) RunPreFilterExtensionRemovePod(
 	return nil
 }
 
-func (f *frameworkImpl) runPreFilterExtensionRemovePod(ctx context.Context, pl framework.PreFilterPlugin, state *framework.CycleState, podToSchedule *v1.Pod, podToAdd *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+func (f *frameworkImpl) runPreFilterExtensionRemovePod(ctx context.Context, pl framework.PreFilterPlugin, state *framework.CycleState, podToSchedule *v1.Pod, podInfoToRemove *framework.PodInfo, nodeInfo *framework.NodeInfo) *framework.Status {
 	if !state.ShouldRecordPluginMetrics() {
-		return pl.PreFilterExtensions().RemovePod(ctx, state, podToSchedule, podToAdd, nodeInfo)
+		return pl.PreFilterExtensions().RemovePod(ctx, state, podToSchedule, podInfoToRemove, nodeInfo)
 	}
 	startTime := time.Now()
-	status := pl.PreFilterExtensions().RemovePod(ctx, state, podToSchedule, podToAdd, nodeInfo)
+	status := pl.PreFilterExtensions().RemovePod(ctx, state, podToSchedule, podInfoToRemove, nodeInfo)
 	f.metricsRecorder.observePluginDurationAsync(preFilterExtensionRemovePod, pl.Name(), status, metrics.SinceInSeconds(startTime))
 	return status
 }
@@ -538,9 +539,10 @@ func (f *frameworkImpl) RunFilterPlugins(
 			if !pluginStatus.IsUnschedulable() {
 				// Filter plugins are not supposed to return any status other than
 				// Success or Unschedulable.
-				errStatus := framework.NewStatus(framework.Error, fmt.Sprintf("running %q filter plugin for pod %q: %v", pl.Name(), pod.Name, pluginStatus.Message()))
+				errStatus := framework.AsStatus(fmt.Errorf("running %q filter plugin: %w", pl.Name(), pluginStatus.AsError())).WithFailedPlugin(pl.Name())
 				return map[string]*framework.Status{pl.Name(): errStatus}
 			}
+			pluginStatus.SetFailedPlugin(pl.Name())
 			statuses[pl.Name()] = pluginStatus
 			if !f.runAllFilters {
 				// Exit early if we don't need to run all filters.
@@ -577,7 +579,7 @@ func (f *frameworkImpl) RunPostFilterPlugins(ctx context.Context, state *framewo
 			return r, s
 		} else if !s.IsUnschedulable() {
 			// Any status other than Success or Unschedulable is Error.
-			return nil, framework.NewStatus(framework.Error, s.Message())
+			return nil, framework.AsStatus(s.AsError())
 		}
 		statuses[pl.Name()] = s
 	}
@@ -635,7 +637,7 @@ func (f *frameworkImpl) RunFilterPluginsWithNominatedPods(ctx context.Context, s
 			var err error
 			podsAdded, stateToUse, nodeInfoToUse, err = addNominatedPods(ctx, ph, pod, state, info)
 			if err != nil {
-				return framework.NewStatus(framework.Error, err.Error())
+				return framework.AsStatus(err)
 			}
 		} else if !podsAdded || !status.IsSuccess() {
 			break
@@ -668,8 +670,9 @@ func addNominatedPods(ctx context.Context, ph framework.PreemptHandle, pod *v1.P
 	podsAdded := false
 	for _, p := range nominatedPods {
 		if corev1.PodPriority(p) >= corev1.PodPriority(pod) && p.UID != pod.UID {
-			nodeInfoOut.AddPod(p)
-			status := ph.RunPreFilterExtensionAddPod(ctx, stateOut, pod, p, nodeInfoOut)
+			podInfoToAdd := framework.NewPodInfo(p)
+			nodeInfoOut.AddPodInfo(podInfoToAdd)
+			status := ph.RunPreFilterExtensionAddPod(ctx, stateOut, pod, podInfoToAdd, nodeInfoOut)
 			if !status.IsSuccess() {
 				return false, state, nodeInfo, status.AsError()
 			}
@@ -694,9 +697,7 @@ func (f *frameworkImpl) RunPreScorePlugins(
 	for _, pl := range f.preScorePlugins {
 		status = f.runPreScorePlugin(ctx, pl, state, pod, nodes)
 		if !status.IsSuccess() {
-			err := status.AsError()
-			klog.ErrorS(err, "Failed running PreScore plugin", "plugin", pl.Name(), "pod", klog.KObj(pod))
-			return framework.AsStatus(fmt.Errorf("running PreScore plugin %q: %w", pl.Name(), err))
+			return framework.AsStatus(fmt.Errorf("running PreScore plugin %q: %w", pl.Name(), status.AsError()))
 		}
 	}
 
@@ -746,7 +747,6 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 		}
 	})
 	if err := errCh.ReceiveError(); err != nil {
-		klog.ErrorS(err, "Failed running Score plugins", "pod", klog.KObj(pod))
 		return nil, framework.AsStatus(fmt.Errorf("running Score plugins: %w", err))
 	}
 
@@ -765,7 +765,6 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 		}
 	})
 	if err := errCh.ReceiveError(); err != nil {
-		klog.ErrorS(err, "Failed running Normalize on Score plugins", "pod", klog.KObj(pod))
 		return nil, framework.AsStatus(fmt.Errorf("running Normalize on Score plugins: %w", err))
 	}
 
@@ -787,7 +786,6 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 		}
 	})
 	if err := errCh.ReceiveError(); err != nil {
-		klog.ErrorS(err, "Failed applying score defaultWeights on Score plugins", "pod", klog.KObj(pod))
 		return nil, framework.AsStatus(fmt.Errorf("applying score defaultWeights on Score plugins: %w", err))
 	}
 
@@ -972,7 +970,8 @@ func (f *frameworkImpl) RunPermitPlugins(ctx context.Context, state *framework.C
 			if status.IsUnschedulable() {
 				msg := fmt.Sprintf("rejected pod %q by permit plugin %q: %v", pod.Name, pl.Name(), status.Message())
 				klog.V(4).Infof(msg)
-				return framework.NewStatus(status.Code(), msg)
+				status.SetFailedPlugin(pl.Name())
+				return status
 			}
 			if status.Code() == framework.Wait {
 				// Not allowed to be greater than maxTimeout.
@@ -984,7 +983,7 @@ func (f *frameworkImpl) RunPermitPlugins(ctx context.Context, state *framework.C
 			} else {
 				err := status.AsError()
 				klog.ErrorS(err, "Failed running Permit plugin", "plugin", pl.Name(), "pod", klog.KObj(pod))
-				return framework.AsStatus(fmt.Errorf("running Permit plugin %q: %w", pl.Name(), err))
+				return framework.AsStatus(fmt.Errorf("running Permit plugin %q: %w", pl.Name(), err)).WithFailedPlugin(pl.Name())
 			}
 		}
 	}
@@ -1009,7 +1008,7 @@ func (f *frameworkImpl) runPermitPlugin(ctx context.Context, pl framework.Permit
 }
 
 // WaitOnPermit will block, if the pod is a waiting pod, until the waiting pod is rejected or allowed.
-func (f *frameworkImpl) WaitOnPermit(ctx context.Context, pod *v1.Pod) (status *framework.Status) {
+func (f *frameworkImpl) WaitOnPermit(ctx context.Context, pod *v1.Pod) *framework.Status {
 	waitingPod := f.waitingPods.get(pod.UID)
 	if waitingPod == nil {
 		return nil
@@ -1025,11 +1024,12 @@ func (f *frameworkImpl) WaitOnPermit(ctx context.Context, pod *v1.Pod) (status *
 		if s.IsUnschedulable() {
 			msg := fmt.Sprintf("pod %q rejected while waiting on permit: %v", pod.Name, s.Message())
 			klog.V(4).Infof(msg)
-			return framework.NewStatus(s.Code(), msg)
+			s.SetFailedPlugin(s.FailedPlugin())
+			return s
 		}
 		err := s.AsError()
 		klog.ErrorS(err, "Failed waiting on permit for pod", "pod", klog.KObj(pod))
-		return framework.AsStatus(fmt.Errorf("waiting on permit for pod: %w", err))
+		return framework.AsStatus(fmt.Errorf("waiting on permit for pod: %w", err)).WithFailedPlugin(s.FailedPlugin())
 	}
 	return nil
 }
@@ -1059,7 +1059,7 @@ func (f *frameworkImpl) GetWaitingPod(uid types.UID) framework.WaitingPod {
 func (f *frameworkImpl) RejectWaitingPod(uid types.UID) {
 	waitingPod := f.waitingPods.get(uid)
 	if waitingPod != nil {
-		waitingPod.Reject("removed")
+		waitingPod.Reject("", "removed")
 	}
 }
 

@@ -89,14 +89,24 @@ getBaseImage() {
 # arm64, ppc64le, s390x
 build() {
   image=$1
+  img_folder=$1
   output_type=$2
   docker_version_check
 
-  if [[ -f ${image}/BASEIMAGE ]]; then
+  if [[ -f "${img_folder}/BASEIMAGE" ]]; then
     os_archs=$(listOsArchs "$image")
   else
     # prepend linux/ to the QEMUARCHS items.
-    os_archs=$(printf 'linux/%s\n' "${!QEMUARCHS[*]}")
+    os_archs=$(printf 'linux/%s\n' "${!QEMUARCHS[@]}")
+  fi
+
+  # image tag
+  TAG=$(<"${img_folder}/VERSION")
+
+  alias_name="$(cat "${img_folder}/ALIAS" 2>/dev/null || true)"
+  if [[ -n "${alias_name}" ]]; then
+    echo "Found an alias for '${image}'. Building / tagging image as '${alias_name}.'"
+    image="${alias_name}"
   fi
 
   kube::util::ensure-gnu-sed
@@ -116,27 +126,25 @@ build() {
     temp_dir=$(mktemp -d "${KUBE_ROOT}"/_tmp/test-images-build.XXXXXX)
     kube::util::trap_add "rm -rf ${temp_dir}" EXIT
 
-    cp -r "${image}"/* "${temp_dir}"
-    if [[ -f ${image}/Makefile ]]; then
+    cp -r "${img_folder}"/* "${temp_dir}"
+    if [[ -f ${img_folder}/Makefile ]]; then
       # make bin will take care of all the prerequisites needed
       # for building the docker image
-      make -C "${image}" bin OS="${os_name}" ARCH="${arch}" TARGET="${temp_dir}"
+      make -C "${img_folder}" bin OS="${os_name}" ARCH="${arch}" TARGET="${temp_dir}"
     fi
     pushd "${temp_dir}"
-    # image tag
-    TAG=$(<VERSION)
 
+    # NOTE(claudiub): Some Windows images might require their own Dockerfile
+    # while simpler ones will not. If we're building for Windows, check if
+    # "Dockerfile_windows" exists or not.
+    dockerfile_name="Dockerfile"
+    if [[ "$os_name" = "windows" && -f "Dockerfile_windows" ]]; then
+      dockerfile_name="Dockerfile_windows"
+    fi
+
+    base_image=""
     if [[ -f BASEIMAGE ]]; then
-      BASEIMAGE=$(getBaseImage "${os_arch}" | ${SED} "s|REGISTRY|${REGISTRY}|g")
-
-      # NOTE(claudiub): Some Windows images might require their own Dockerfile
-      # while simpler ones will not. If we're building for Windows, check if
-      # "Dockerfile_windows" exists or not.
-      dockerfile_name="Dockerfile"
-      if [[ "$os_name" = "windows" && -f "Dockerfile_windows" ]]; then
-        dockerfile_name="Dockerfile_windows"
-      fi
-
+      base_image=$(getBaseImage "${os_arch}" | ${SED} "s|REGISTRY|${REGISTRY}|g")
       ${SED} -i "s|BASEARCH|${arch}|g" $dockerfile_name
     fi
 
@@ -160,8 +168,8 @@ build() {
       fi
     fi
 
-    docker buildx build --no-cache --pull --output=type="${output_type}" --platform "${os_name}/${arch}" \
-        --build-arg BASEIMAGE="${BASEIMAGE}" --build-arg REGISTRY="${REGISTRY}" --build-arg OS_VERSION="${os_version}" \
+    docker buildx build --progress=plain --no-cache --pull --output=type="${output_type}" --platform "${os_name}/${arch}" \
+        --build-arg BASEIMAGE="${base_image}" --build-arg REGISTRY="${REGISTRY}" --build-arg OS_VERSION="${os_version}" \
         -t "${REGISTRY}/${image}:${TAG}-${suffix}" -f "${dockerfile_name}" .
 
     popd
@@ -187,7 +195,14 @@ push() {
     os_archs=$(listOsArchs "$image")
   else
     # prepend linux/ to the QEMUARCHS items.
-    os_archs=$(printf 'linux/%s\n' "${!QEMUARCHS[*]}")
+    os_archs=$(printf 'linux/%s\n' "${!QEMUARCHS[@]}")
+  fi
+
+  pushd "${image}"
+  alias_name="$(cat ALIAS 2>/dev/null || true)"
+  if [[ -n "${alias_name}" ]]; then
+    echo "Found an alias for '${image}'. Pushing image as '${alias_name}.'"
+    image="${alias_name}"
   fi
 
   kube::util::ensure-gnu-sed
@@ -223,6 +238,7 @@ push() {
         "${HOME}/.docker/manifests/${manifest_image_folder}/${manifest_image_folder}-${suffix}"
     fi
   done
+  popd
   docker manifest push --purge "${REGISTRY}/${image}:${TAG}"
 }
 
